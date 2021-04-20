@@ -506,7 +506,7 @@ topCorLooper <- lapply(chemIndexer, function(idx)  {
 # Find the Spearman correlation coefficient for the most significant peaks, the middle peak, and a smaller peak for each drug. Make a dataframe that has the Chemical and averaged correlation coefficient over that interval. 
 
 directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
-files <- dir(path = directory, pattern = "_pearson_cors.txt$")
+files <- dir(path = directory, pattern = "_spearman_cors.txt$")
 setwd(directory)
 allCorDFs <- lapply(files, function(read) {
     read.table(read, header = T, sep = "\t")
@@ -519,27 +519,19 @@ byChems <- lapply(allCorDFs, function(corr) {
     print(identifier)
     flush.console()
     tic('total time')
-    corr[corr == 1] <- 0.9999999
-    zCorrs <- FisherZ(corr)
-    zCorrs$gp <- substr(rownames(zCorrs), regexpr("_12-", rownames(zCorrs)) + 4, regexpr("-R", rownames(zCorrs)) - 1)
-    zCorrsLst <- split(zCorrs, zCorrs$gp)
-    rmveGP <- lapply(zCorrsLst, function(x) {subset(x, select=-c(gp))})
-    zCorrsLstMats <- lapply(rmveGP, as.matrix)
-    matMeans <- lapply(zCorrsLstMats, function(x) mean(x[upper.tri(x)]))
-    invZCorrs <- unlist(lapply(matMeans, FisherZInv))
-    meanCorDT <- data.table(gp = as.numeric(names(invZCorrs)), avgRho = invZCorrs)[order(gp)]
-    #corr$gp <- substr(rownames(corr), regexpr("_12-", rownames(corr)) + 4, regexpr("-R", rownames(corr)) - 1)
-    #corrsLst <- split(corr, corr$gp)
-    #rmveGP <- lapply(corrsLst, function(x) {subset(x, select=-c(gp))})
-    #corrsLstMats <- lapply(rmveGP, as.matrix)
-    #matMeans <- lapply(corrsLstMats, function(x) mean(x[upper.tri(x)]))
-    #meanCorDT <- data.table(gp = as.numeric(names(matMeans)), avgRho = unlist(matMeans))[order(gp)]
+    corr$gp <- substr(rownames(corr), regexpr("_12-", rownames(corr)) + 4, regexpr("-R", rownames(corr)) - 1)
+    corrLst <- split(corr, corr$gp)
+    rmveGP <- lapply(corrLst, function(x) {subset(x, select=-c(gp))})
+    corrLstMats <- lapply(rmveGP, as.matrix)
+    matMeans <- unlist(lapply(corrLstMats, function(x) mean(x[upper.tri(x)])))
+    meanCorDT <- data.table(gp = as.numeric(names(matMeans)), avgRho = matMeans)[order(gp)]
     chemIdx <- allIdx[grepl(identifier, Chemical)]
     idxSplit <- split(chemIdx, chemIdx$Idx)
     idxLoop <- lapply(idxSplit, function(idx) {
             idxMeanCorDT <- meanCorDT[grepl(paste(as.character(unique(idx$gp)), collapse = "|"), gp)]
             meanCor <- idxMeanCorDT[, mean(avgRho)]
             meanCorDT2 <- data.table(Chemical = idx$Chemical[1], avgRho = meanCor, idx = idx$Idx[1])
+            meanCorDT2
     } )
     toc()
     idxBind <- do.call(rbind, idxLoop)
@@ -721,7 +713,7 @@ plotLooper <- lapply(idxLooperAll, function(indexing) {
         corDT <- chemCorsDT[idx %in% chem$Idx[1] & Chemical %in% chem$Chemical[1]]
         corDT[, rhoLabel := sprintf("italic(R) == %.2f", avgRho)]
         gplot <- ggplot(data=allRepsDT, aes(`pos(kb)`, freqDifs, colour = hapGrps, shape = Replicate, group = interaction(grp,Replicate))) + coord_cartesian(ylim = c(-1, 1.1)) + xlab(paste0("chr", as.roman(allRepsDT$chr[1]), " position (kb)")) + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(allRepsDT$color.codes, allRepsDT$hapGrps)) + scale_shape_manual(values = setNames(allRepsDT$Shape, allRepsDT$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = rhoLabel), parse = TRUE, inherit.aes = FALSE) + geom_segment(data = spliceDT, aes(x = `pos(kb)1`, xend = `pos(kb)2`, y = freq1, yend = freq2), colour = "darkgray", linetype = 2, show.legend = FALSE, inherit.aes = FALSE)
-        ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Ind_Plots/Hap_change_repeatability_by_peak_size_", chem$Chemical[1], "_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
+        ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Ind_Plots/Hap_change_repeatability_by_peak_size_spearman", chem$Chemical[1], "_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
     } )
 } )
 

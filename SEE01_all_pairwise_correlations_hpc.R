@@ -22,13 +22,24 @@ flush.console()
 listofCors <- lapply(chemPOS$V1, function(x) {
     #print(x)
     if(length(x) > 1) {print(x)}
-    newCols <- gsub("-R[0-9][0-9]$", "", colnames(hapFreqsFilt))
+    newCols <- gsub("-R[0-9][0-9]$", "", hapFreqsFilt2$variable)
+    allReps <- substr()
     findPos <- which(newCols == x)
-    corrDF <- hapFreqsFilt[, c(findPos), with = FALSE]
-    corrDF <- na.omit(corrDF)
-    cors <- cor(corrDF, use = "everything", method = "spearman")
+    corrDT <- hapFreqsFilt2[findPos]
+    reps <- length(unique(gsub(".*-", "", corrDT$variable)))
+    hapNum <- corrDT[, .N/reps]
+    repSplit <- split(corrDT, cut(seq_len(nrow(corrDT)), nrow(corrDT)/hapNum, labels = FALSE))
+    reForm <- lapply(repSplit, function(y) {
+        repDT <- data.table(V1 = y$value)
+        names(repDT) <- as.character(y$variable[1])
+        repDT
+    } )
+    allReps <- do.call(cbind, reForm)
+    allReps <- na.omit(allReps)
+    cors <- cor(allReps, use = "everything", method = "spearman")
     #cors <- cor.fk(corrDF)
     corsDF <- as.data.frame(cors, stringsAsFactors = FALSE)
+    names(corsDF) <- gsub(".*\\.", "", names(corsDF))
     names(corsDF) <- unlist(lapply(names(corsDF), function(x) {paste(strsplit(x, "-")[[1]][c(1,3)], collapse = "-")}))
     corsDF
 })

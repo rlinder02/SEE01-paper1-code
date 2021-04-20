@@ -506,7 +506,7 @@ topCorLooper <- lapply(chemIndexer, function(idx)  {
 # Find the Spearman correlation coefficient for the most significant peaks, the middle peak, and a smaller peak for each drug. Make a dataframe that has the Chemical and averaged correlation coefficient over that interval. 
 
 directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
-files <- dir(path = directory, pattern = "_pearson_cors.txt$")
+files <- dir(path = directory, pattern = "_spearman_cors.txt$")
 setwd(directory)
 allCorDFs <- lapply(files, function(read) {
     read.table(read, header = T, sep = "\t")

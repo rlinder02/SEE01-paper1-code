@@ -440,11 +440,7 @@ idxLooper <- lapply(chemIndexer, function(idx)  {
     freqDifs <- idx[, tstrsplit(freqDifs, split = ";", type.convert = TRUE, fixed = TRUE)]
     collHaps <- as.data.frame(idx[, tstrsplit(collapsedFounders, split = ";", type.convert = TRUE, fixed = TRUE)])
     maxVals <- apply(freqDifs, 1, max, na.rm = T) ## only looking at increasing values
-    #minVals <- apply(freqDifs, 1, min, na.rm = T)
-    #maxMinDF <- data.frame(max = maxVals, min = abs(minVals))
-    #maxRows <- apply(maxMinDF, 1, which.max)
     maxIdx <- apply(freqDifs, 1, which.max)
-    #minIdx <- apply(freqDifs, 1, which.min)
     idxDF <- data.frame(row = 1:length(maxIdx), col = maxIdx)
     maxHap <- collHaps[as.matrix(idxDF)]
     idx[, c("maxHap", "maxChange") := .(maxHap, maxVals)]
@@ -457,41 +453,6 @@ idxLooper <- lapply(chemIndexer, function(idx)  {
     Shapes <- repShapes$shapes[reps]
     idx[, c("color.codes", "Shape") := .(Colors, Shapes)][, "pos(kb)" := pos/1000][, "pos" := NULL]
     idx
-})
-
-topCorLooper <- lapply(chemIndexer, function(idx)  {
-    chemSplit <- split(idx, idx$Chemical)
-        chemLooper <- lapply(chemSplit, function(chem) {
-        freqDifs <- chem[, tstrsplit(freqDifs, split = ";", type.convert = TRUE, fixed = TRUE)]
-        freqDifsDF <- as.data.frame(freqDifs)
-        collHaps <- as.data.frame(chem[, tstrsplit(collapsedFounders, split = ";", type.convert = TRUE, fixed = TRUE)])
-        collHaps$gp <- chem$gp
-        maxVals <- apply(freqDifs, 1, max, na.rm = T) ## only looking at increasing values
-        maxIdx <- apply(freqDifs, 1, which.max)
-        idxDF <- data.frame(row = 1:length(maxIdx), col = maxIdx)
-        maxHap <- collHaps[as.matrix(idxDF)]
-        chem[, c("maxHap", "maxChange") := .(maxHap, maxVals)]
-        maxHaps <- chem[, unique(maxHap)]
-        gpSplit <- split(collHaps, collHaps$gp)
-        gpLooper <- lapply(gpSplit, function(gpos) {
-            maxHapsIdx <- data.frame(apply(gpos, 1, function(x) which(x %in% maxHaps)))
-            columns <- nrow(maxHapsIdx)
-            freqIdxDF <- data.frame(row = as.numeric(rownames(maxHapsIdx)), col = unlist(maxHapsIdx))
-            topFreqs <- freqDifsDF[as.matrix(freqIdxDF)]
-            
-            
-            slimChem <- chem[, c("chr", "pos", "gp", "Chemical", "Replicate", "maxHap", "maxChange", "Idx")]
-
-        
-        eachPos <- slimChem[, maxHap, by = gp]
-        idx[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
-        hapColors <- match(idx$maxHap, topHaps)
-        hapColors[is.na(hapColors)] <- (length(topHaps) + 1)
-        Colors <- mycols[hapColors]
-        reps <- match(idx$Replicate, repShapes$reps)
-        Shapes <- repShapes$shapes[reps]
-        idx[, c("color.codes", "Shape") := .(Colors, Shapes)][, "pos(kb)" := pos/1000][, "pos" := NULL]
-        idx
 })
 
 # ============================================================================
@@ -533,23 +494,13 @@ byChems <- lapply(allCorDFs, function(corr) {
 chemCorsDT <- do.call(rbind, byChems)     
 
 # ============================================================================
-# Find the Pearson correlation coefficient for the most significant peaks, the middle peak, and a smaller peak for each drug that only looks at the most increased haplotype (if different replicates have different most changed haplotypes, use the mean correlation of these haplotypes). Make a dataframe that has the Chemical and averaged correlation coefficient over that interval. Need to convert Pearson coefficient to z-score, average the z-scores, then back-transform.
-
-hapFreqs <- fread("Reformatted_SEE01_hap_freqs_v2.txt")
-
-
-
-
-# ============================================================================
 # Plot the frequency of the most changed haplotype (for each replicate), with each replicate a different shape and the haplotypes colored consistently with previous plots. Have these plotted as a separate sub-panel for each chemical using facet. Show the most significant peak, a middle peak, and a smaller peak that is likely still real to show how repeatability changes as a function of the LOD score, with each type of peak a separate panel (A-C). Include as text the standard deviation.
 
 counter <- 0
 plotLooper <- lapply(idxLooper, function(idce) {
     counter <<- counter + 1
     chrDT <- idce[, .(chr = chr[1]), by = "Chemical"]
-    corDT <- chemCorsDT[idx %in% idce$Idx[1]]
-    ggplot2::theme_update(plot.tag = element_text(face = "bold", colour = "black"))
-    gplot <- ggplot(data=idce, aes(`pos(kb)`, maxChange, group = Replicate, colour = maxHap, shape = Replicate)) + facet_wrap(~as.factor(Chemical), scales = "free_x") + coord_cartesian(ylim = c(0, 1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(idce$color.codes, idce$maxHap)) + scale_shape_manual(values = setNames(idce$Shape, idce$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + geom_text(parse = TRUE, data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = round(avgRho, 2)), inherit.aes = FALSE) + labs(tag = LETTERS[counter])
+    gplot <- ggplot(data=idce, aes(`pos(kb)`, maxChange, group = Replicate, colour = maxHap, shape = Replicate)) + facet_wrap(~as.factor(Chemical), scales = "free_x") + coord_cartesian(ylim = c(0, 1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(idce$color.codes, idce$maxHap)) + scale_shape_manual(values = setNames(idce$Shape, idce$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + labs(tag = LETTERS[counter])
     ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Hap_change_repeatability_by_peak_size_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
 } )
 #savePlot <- do.call(ggarrange, c(plotLooper, list(common.legend = TRUE, legend = "right")))

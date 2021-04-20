@@ -434,7 +434,7 @@ chemIndexer <- lapply(orderedWins, function(idx) {
 } )
 
 # ============================================================================
-# Find the most increased haplotype within each window .
+# Find the two most increased haplotypes within each window.
 
 idxLooper <- lapply(chemIndexer, function(idx)  {
     freqDifs <- idx[, tstrsplit(freqDifs, split = ";", type.convert = TRUE, fixed = TRUE)]
@@ -444,15 +444,25 @@ idxLooper <- lapply(chemIndexer, function(idx)  {
     idxDF <- data.frame(row = 1:length(maxIdx), col = maxIdx)
     maxHap <- collHaps[as.matrix(idxDF)]
     idx[, c("maxHap", "maxChange") := .(maxHap, maxVals)]
-    idx <- idx[, c("chr", "pos", "gp", "Chemical", "Replicate", "maxHap", "maxChange", "Idx")]
+    nxtMax <- apply(freqDifs, 1, function(x) rev(sort(x))[2])
+    nxtMaxIdx <- apply(freqDifs, 1, function(x) which(x == rev(sort(x))[2])[1])
+    idxDF2 <- data.frame(row = 1:length(nxtMaxIdx), col = unlist(nxtMaxIdx))
+    maxHap2 <- collHaps[as.matrix(idxDF2)]
+    idx[, c("maxHap2", "maxChange2") := .(maxHap2, nxtMax)]
+    idx <- idx[, c("chr", "pos", "gp", "Chemical", "Replicate", "maxHap", "maxChange", "maxHap2", "maxChange2", "Idx")]
     idx[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
-    hapColors <- match(idx$maxHap, topHaps)
+    idxMelt1 <- melt(idx, id.vars = c("chr", "pos", "gp", "Chemical", "Replicate", "Idx"), measure.vars = c("maxChange", "maxChange2"))
+    idxMelt2 <- melt(idx, id.vars = c("chr", "pos", "gp", "Chemical", "Replicate", "Idx"), measure.vars = c("maxHap", "maxHap2"))
+    setnames(idxMelt2, old = c("variable", "value"), new = c("hapType", "haplotype"))
+    idxMrge <- idxMelt1[, c("hapType", "haplotype") := .(idxMelt2$hapType, idxMelt2$haplotype)]
+    setnames(idxMrge, old = c("variable", "value"), new = c("changeType", "frequencyChange"))
+    hapColors <- match(idxMrge$haplotype, topHaps)
     hapColors[is.na(hapColors)] <- (length(topHaps) + 1)
     Colors <- mycols[hapColors]
-    reps <- match(idx$Replicate, repShapes$reps)
+    reps <- match(idxMrge$Replicate, repShapes$reps)
     Shapes <- repShapes$shapes[reps]
-    idx[, c("color.codes", "Shape") := .(Colors, Shapes)][, "pos(kb)" := pos/1000][, "pos" := NULL]
-    idx
+    idxMrge[, c("color.codes", "Shape") := .(Colors, Shapes)][, "pos(kb)" := pos/1000][, "pos" := NULL]
+    idxMrge
 })
 
 # ============================================================================
@@ -500,7 +510,8 @@ counter <- 0
 plotLooper <- lapply(idxLooper, function(idce) {
     counter <<- counter + 1
     chrDT <- idce[, .(chr = chr[1]), by = "Chemical"]
-    gplot <- ggplot(data=idce, aes(`pos(kb)`, maxChange, group = Replicate, colour = maxHap, shape = Replicate)) + facet_wrap(~as.factor(Chemical), scales = "free_x") + coord_cartesian(ylim = c(0, 1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(idce$color.codes, idce$maxHap)) + scale_shape_manual(values = setNames(idce$Shape, idce$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + labs(tag = LETTERS[counter])
+    idce <- idce[, hapGrps := haplotype][!hapGrps %in% topHaps, hapGrps := "other"]
+    gplot <- ggplot(data=idce, aes(`pos(kb)`, frequencyChange, group = interaction(Replicate, changeType), colour = hapGrps, shape = Replicate)) + facet_wrap(~as.factor(Chemical), scales = "free_x") + coord_cartesian(ylim = c(-1, 1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(idce$color.codes, idce$hapGrps)) + scale_shape_manual(values = setNames(idce$Shape, idce$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + labs(tag = LETTERS[counter])
     ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Hap_change_repeatability_by_peak_size_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
 } )
 #savePlot <- do.call(ggarrange, c(plotLooper, list(common.legend = TRUE, legend = "right")))
@@ -661,7 +672,45 @@ plotLooper <- lapply(idxLooperAll, function(indexing) {
 } )
 
 # ============================================================================
+# Find the average Spearman correlation per site genomewide for each chemical separately.
+
+byChems <- lapply(allCorDFs, function(corr) {
+    identifier <- strsplit(rownames(corr)[1], "_")[[1]][2]
+    print(identifier)
+    flush.console()
+    tic('total time')
+    chemName <- gsub("-.*", "", rownames(corr)[1])
+    corr$gp <- substr(rownames(corr), regexpr("_12-", rownames(corr)) + 4, regexpr("-R", rownames(corr)) - 1)
+    corrLst <- split(corr, corr$gp)
+    rmveGP <- lapply(corrLst, function(x) {subset(x, select=-c(gp))})
+    corrLstMats <- lapply(rmveGP, as.matrix)
+    matMeans <- unlist(lapply(corrLstMats, function(x) mean(x[upper.tri(x)])))
+    meanCorDT <- data.table(chemWeek = chemName, gp = as.numeric(names(matMeans)), avgRho = matMeans)[order(gp)]
+    toc()
+    meanCorDT
+} )
+
+gpCorDT <- do.call(rbind, byChems)     
+
+# ============================================================================
+# Plot the correlation between LOD score and spearman correlation per site genomewide.
+
+popDT <- do.call(rbind, indLODDTs)
+chem2 <- merge(popDT, gpCorDT, by = c("gp", "chemWeek"))
+chem2[, Chemical := gsub("18way_|_", " ", Chemical)]
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(LOD, avgRho)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
 # Trouble-shooting
 
+chemSplit <- split(popDT, popDT$chemWeek)
+chemLoop <- lapply(chemSplit, function(chem) {
+print(chem$chemWeek[1])
+flush.console()
+    
 
 library(ggfortify)

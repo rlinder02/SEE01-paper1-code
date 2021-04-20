@@ -467,11 +467,7 @@ topCorLooper <- lapply(chemIndexer, function(idx)  {
         collHaps <- as.data.frame(chem[, tstrsplit(collapsedFounders, split = ";", type.convert = TRUE, fixed = TRUE)])
         collHaps$gp <- chem$gp
         maxVals <- apply(freqDifs, 1, max, na.rm = T) ## only looking at increasing values
-        #minVals <- apply(freqDifs, 1, min, na.rm = T)
-        #maxMinDF <- data.frame(max = maxVals, min = abs(minVals))
-        #maxRows <- apply(maxMinDF, 1, which.max)
         maxIdx <- apply(freqDifs, 1, which.max)
-        #minIdx <- apply(freqDifs, 1, which.min)
         idxDF <- data.frame(row = 1:length(maxIdx), col = maxIdx)
         maxHap <- collHaps[as.matrix(idxDF)]
         chem[, c("maxHap", "maxChange") := .(maxHap, maxVals)]
@@ -479,14 +475,10 @@ topCorLooper <- lapply(chemIndexer, function(idx)  {
         gpSplit <- split(collHaps, collHaps$gp)
         gpLooper <- lapply(gpSplit, function(gpos) {
             maxHapsIdx <- data.frame(apply(gpos, 1, function(x) which(x %in% maxHaps)))
-            names(maxHapsIdx) <- gsub("X", "", names(maxHapsIdx))
             columns <- nrow(maxHapsIdx)
-            freqIdxDF <- data.frame(row = sort(rep(as.numeric(names(maxHapsIdx)), columns)), col = unlist(maxHapsIdx))
+            freqIdxDF <- data.frame(row = as.numeric(rownames(maxHapsIdx)), col = unlist(maxHapsIdx))
             topFreqs <- freqDifsDF[as.matrix(freqIdxDF)]
-            hapVecs <- split(topFreqs, cut(seq_along(topFreqs), length(topFreqs)/columns, labels = FALSE))
-            hapVecDF <- as.data.frame(hapVecs)
-            cors <- cor(hapVecDF, use = "everything", method = "pearson")
-            corsDF <- as.data.frame(cors)
+            
             
             slimChem <- chem[, c("chr", "pos", "gp", "Chemical", "Replicate", "maxHap", "maxChange", "Idx")]
 
@@ -549,7 +541,7 @@ hapFreqs <- fread("Reformatted_SEE01_hap_freqs_v2.txt")
 
 
 # ============================================================================
-# Plot the frequency of the most changed haplotype (for each replicate), with each replicate a different shape and the haplotypes colored consistently with previous plots. Have these plotted as a separate sub-panel for each chemical using facet. Show the most significant peak, a middle peak, and a smaller peak that is likely still real to show how repeatability changes as a function of the LOD score, with each type of peak a separate panel (A-C). Include as text the Pearson correlation coefficient.
+# Plot the frequency of the most changed haplotype (for each replicate), with each replicate a different shape and the haplotypes colored consistently with previous plots. Have these plotted as a separate sub-panel for each chemical using facet. Show the most significant peak, a middle peak, and a smaller peak that is likely still real to show how repeatability changes as a function of the LOD score, with each type of peak a separate panel (A-C). Include as text the standard deviation.
 
 counter <- 0
 plotLooper <- lapply(idxLooper, function(idce) {

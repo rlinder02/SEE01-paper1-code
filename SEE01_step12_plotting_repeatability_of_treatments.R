@@ -118,6 +118,7 @@ founderNames <- founderNames[,V1]
 nFounders <- length(founderNames)
 indHapDiffsDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Ind_tx_ind_haps_sum_of_squared_diffs_tables/", analysisType = "haps_sq_diffs", samplePattern = "^SEE12B02")
 indLODDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Hap_adjusted_LOD_tables/", analysisType = "hap_adjusted_LOD", samplePattern = "^SEE12B02")
+indHapDevsDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Ind_rep_hap_dev_tables/", analysisType = "avg_hap_devs", samplePattern = "^SEE12B02")
 
 treatKeyDT <- fread("treatment_key.txt", header = T)
 offsets <- read.table("newoffsets.txt", header = T)
@@ -466,6 +467,27 @@ idxLooper <- lapply(chemIndexer, function(idx)  {
 })
 
 # ============================================================================
+# Find the sd of the most increased haplotypes at each position genomewide.
+
+popDT <- do.call(rbind, indHapDiffsDTs)
+freqDifs <- popDT[, tstrsplit(freqDifs, split = ";", type.convert = TRUE, fixed = TRUE)]
+collHaps <- as.data.frame(popDT[, tstrsplit(collapsedFounders, split = ";", type.convert = TRUE, fixed = TRUE)])
+maxVals <- apply(freqDifs, 1, max, na.rm = T) ## only looking at increasing values
+maxIdx <- apply(freqDifs, 1, which.max)
+idxDF <- data.frame(row = 1:length(maxIdx), col = maxIdx)
+maxHap <- collHaps[as.matrix(idxDF)]
+popDT[, c("maxHap", "maxChange") := .(maxHap, maxVals)]
+popDT2 <- popDT[, c("chr", "pos", "gp", "Chemical", "Replicate", "maxHap", "maxChange")]
+popDT2[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
+maxHapsDT <- popDT2[, .(maxHaps = uniqueN(maxHap), avgFreqChange = mean(maxChange)), by = c("Chemical", "gp")] ### can try seeing if higher LOD translates to same haplotype increasing most in frequency genomewide- score is number of unique maxHaps over number of replicates
+
+### now calculate the sd for positions where only a single haplotype is the most frequent
+
+oneHap <- maxHapsDT[maxHaps == 1, gp]
+popDT3 <- popDT2[gp %in% oneHap]
+sdDT <- popDT3[, .(sdMax = sd(maxChange)), by = c("Chemical", "gp")]
+
+# ============================================================================
 # Find the Spearman correlation coefficient for the most significant peaks, the middle peak, and a smaller peak for each drug. Make a dataframe that has the Chemical and averaged correlation coefficient over that interval. 
 
 directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
@@ -703,6 +725,84 @@ panelPlot <- ggplot(chemDF, aes(LOD, avgRho)) + facet_wrap(~as.factor(Chemical),
 savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
 savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
 ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation between LOD score and mean per site haplotype deviation genomewide.
+
+popDT <- do.call(rbind, indLODDTs)
+devDT <- do.call(rbind, indHapDevsDTs)
+avgDevDT <- devDT[, .(sqrtAvgHapDifs = mean(sqrtAvgHapDifs)), by = c("chemWeek", "gp")]
+chem2 <- merge(popDT, avgDevDT, by = c("gp", "chemWeek"))
+chem2[, Chemical := gsub("18way_|_", " ", Chemical)]
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(LOD, sqrtAvgHapDifs)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "pearson", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation between mean per site correlation and mean per site haplotype deviation genomewide.
+
+devDT <- do.call(rbind, indHapDevsDTs)
+avgDevDT <- devDT[, .(sqrtAvgHapDifs = mean(sqrtAvgHapDifs)), by = c("chemWeek", "gp")]
+chem2 <- merge(gpCorDT, avgDevDT, by = c("gp", "chemWeek"))
+chem2[, Chemical := gsub("18way_|_", " ", chemWeek)]
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(avgRho, sqrtAvgHapDifs)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation between LOD score and mean standard deviation of the most increased haplotype at each position genomewide.
+
+popDT <- do.call(rbind, indLODDTs)
+popDT[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
+chem2 <- merge(popDT, sdDT, by = c("gp", "Chemical"))
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(LOD, sdMax)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation between LOD score and number of unique max haplotypes genomewide.
+
+popDT <- do.call(rbind, indLODDTs)
+popDT[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
+chem2 <- merge(popDT, maxHapsDT, by = c("gp", "Chemical"))
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(LOD, maxHaps)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation between LOD score and avg max haplotypes frequency change per site genomewide.
+
+popDT <- do.call(rbind, indLODDTs)
+popDT[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
+chem2 <- merge(popDT, maxHapsDT, by = c("gp", "Chemical"))
+chemDF <- as.data.frame(chem2)
+panelPlot <- ggplot(chemDF, aes(LOD, avgFreqChange)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the correlation the number of max haplotypes and the avg max haplotypes frequency change per site genomewide.
+
+chemDF <- as.data.frame(maxHapsDT)
+panelPlot <- ggplot(chemDF, aes(maxHaps, avgFreqChange)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + scale_fill_continuous(type = "viridis") + stat_cor(aes(label = ..r.label..)) + geom_smooth(method = "lm") + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+maxHapsDT <- popDT2[, .(maxHaps = uniqueN(maxHap)), by = c("Chemical", "gp")]
 
 # ============================================================================
 # Trouble-shooting

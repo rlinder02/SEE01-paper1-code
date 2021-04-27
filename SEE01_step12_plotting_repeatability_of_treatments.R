@@ -22,6 +22,7 @@ library(ggpubr)
 library(ggbeeswarm)
 library(DescTools)
 library(abind)
+library(job)
 
 source('formatting/Haplotype_file_splitter.R')
 source('utils/Writing_files_helper.R')
@@ -119,6 +120,7 @@ nFounders <- length(founderNames)
 indHapDiffsDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Ind_tx_ind_haps_sum_of_squared_diffs_tables/", analysisType = "haps_sq_diffs", samplePattern = "^SEE12B02")
 indLODDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Hap_adjusted_LOD_tables/", analysisType = "hap_adjusted_LOD", samplePattern = "^SEE12B02")
 indHapDevsDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Ind_rep_hap_dev_tables/", analysisType = "avg_hap_devs", samplePattern = "^SEE12B02")
+repLODDTs <- reading_read.in.dts.as.list(projectRootDir = projectDir, folderPath = "Data_Analysis/Sequencing_analysis/Tables/Repeatability_tables/", analysisType = "hap_adjusted_LOD", samplePattern = "^18way")
 
 treatKeyDT <- fread("treatment_key.txt", header = T)
 offsets <- read.table("newoffsets.txt", header = T)
@@ -283,6 +285,7 @@ allCorDFs <- lapply(files, function(read) {
 } )
 setwd(paste0(projectDir, "Data_Storage/Sequencing_Data_Processed/"))
 
+job::job(corJob = {
 byChems <- lapply(allCorDFs, function(corr) {
     tic('total time')
     chemReps <- unique(names(corr))
@@ -300,8 +303,9 @@ byChems <- lapply(allCorDFs, function(corr) {
         corrAvgs
     } )
 } )
+}, import = c(allCorDFs), packages = c("data.table", "tictoc") )
 
-chemCorDTs <- lapply(byChems, function(x) {
+chemCorDTs <- lapply(corJob$byChems, function(x) {
     bindReps <- do.call(cbind, x)
     bindRepsDF <- as.data.frame(bindReps, stringsAsFactors = FALSE)
     chemName <- strsplit(names(bindRepsDF)[2], "\\.")[[1]][1]
@@ -340,6 +344,56 @@ wayLooper <- lapply(waySplit, function(wayList) {
         ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Summary_plots/SEE01_", fileName3), savePlot, width = 8.5, height = 8.5, units = "in")
     } )
 } )
+
+# ============================================================================
+# Plot a dendrogram of all replicates for each sample using Spearman correlation
+
+directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
+setwd(directory)
+allCorDF <- read.table("all_chems_all_reps_spearman_cors.txt", header = T, sep = "\t")
+setwd(paste0(projectDir, "Data_Storage/Sequencing_Data_Processed/"))
+
+allCorDF <- allCorDF[-grep("fluconazole|nic", rownames(allCorDF)),]
+allCorDF <- allCorDF[-grep("cadmium_chloride_12.*-R0[1-3]|YPD_12.*-R10|glacial_acetic_acid_12.*-R08|chlorpromazine_12.*-R12|chlorpromazine_12.*-R13", rownames(allCorDF)),]
+allCorDF <- allCorDF[, -grep("fluconazole|nic|cadmium_chloride_12.R0[1-3]|YPD_12.R10|glacial_acetic_acid_12.R08|chlorpromazine_12.R12|chlorpromazine_12.R13", names(allCorDF))]
+
+job::job(corJob = {
+    chemReps <- unique(names(allCorDF))
+    corAvgs <- lapply(chemReps, function(x) {
+        tic()
+        corrGrp <- allCorDF[,grep(x, names(allCorDF))]
+        corrGrp <- as.data.frame(corrGrp)
+        names(corrGrp) <- x
+        rownames(corrGrp) <- rownames(allCorDF)
+        corrGrp$id <- gsub(".*18way_", "", rownames(allCorDF))
+        corrGrp$id <- gsub("_12.*-", "-", corrGrp$id)
+        #corrGrp$gp <- as.numeric(gsub(".*_12-|-R.*", "", rownames(allCorDF)))
+        corrGrpDT <- as.data.table(corrGrp)
+        corrAvgs <- corrGrpDT[, mean(get(x), na.rm = T), by = id]
+        setnames(corrAvgs, c("id", x))
+        toc()
+        corrAvgs
+    } )
+}, import = c(allCorDF), packages = c("data.table", "tictoc") )
+
+filePath <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/")
+CC2 <- do.call(cbind, corJob$corAvgs)
+CC3 <- as.data.frame(CC2)
+rownames(CC3) <- CC2$id
+CC4 <- CC3[, -grep("^id", names(CC3))]
+names(CC4) <- gsub("X18way_", "", names(CC4))
+names(CC4) <- gsub("_12.", "-", names(CC4))
+out <- hclust(as.dist(1-CC4^2))
+fileName <- paste0(filePath, "all_reps_Spearman_cors_v2.png")
+mainTitle <- paste0("Spearman_correlations_v2")
+png(fileName, width = 10, height = 10, units = 'in', res = 150)
+par(mar = c(7.5,3,1.5,0.5), mgp = c(2,0.7,0), oma = c(0,0,0,0))
+par(cex = 0.75)
+plot(as.dendrogram(out), xlab = "", ylab = "", main = "", sub = "", axes = FALSE, ylim = c(0, 1))
+par(cex = 1)
+title(main = mainTitle, ylab = "height")
+axis(2)
+dev.off()
 
 # ============================================================================
 # Plotting avg heterozygosity vs avg correlation per treatment (not significant)
@@ -499,7 +553,8 @@ allCorDFs <- lapply(files, function(read) {
 setwd(paste0(projectDir, "Data_Storage/Sequencing_Data_Processed/"))
 
 allIdx <- do.call(rbind, idxLooper)
-byChems <- lapply(allCorDFs, function(corr) {
+job::job(allChems = {
+    byChems <- lapply(allCorDFs, function(corr) {
     identifier <- strsplit(rownames(corr)[1], "_")[[1]][2]
     print(identifier)
     flush.console()
@@ -522,8 +577,9 @@ byChems <- lapply(allCorDFs, function(corr) {
     idxBind <- do.call(rbind, idxLoop)
     idxBind
 } )
+}, import = c(allIdx, allCorDFs), packages = c("data.table", "tictoc") )
 
-chemCorsDT <- do.call(rbind, byChems)     
+chemCorsDT <- do.call(rbind, allChems$byChems)     
 
 # ============================================================================
 # Plot the frequency of the most changed haplotype (for each replicate), with each replicate a different shape and the haplotypes colored consistently with previous plots. Have these plotted as a separate sub-panel for each chemical using facet. Show the most significant peak, a middle peak, and a smaller peak that is likely still real to show how repeatability changes as a function of the LOD score, with each type of peak a separate panel (A-C). Include as text the standard deviation.
@@ -692,6 +748,108 @@ plotLooper <- lapply(idxLooperAll, function(indexing) {
         ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Ind_Plots/Hap_change_repeatability_by_peak_size_spearman", chem$Chemical[1], "_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
     } )
 } )
+
+# ============================================================================
+# Calculating z-scores for log transformed LOD data and comparing the 3 vs 3 replicates genomewide via Spearmans' rho
+
+popDT <- do.call(rbind, repLODDTs)
+popDT[, logLOD := log(LOD), by = seq_len(nrow(popDT))]
+lodDT <- dcast(popDT, gp + chr + pos ~ Chemical, value.var = "logLOD")
+names(lodDT) <- gsub("18way_", "", names(lodDT))
+names(lodDT) <- gsub("_", " ", names(lodDT))
+lodDF <- as.data.frame(lodDT)
+lodDF[,4:ncol(lodDF)] <- scale(lodDF[,4:ncol(lodDF)])
+lodDT <- as.data.table(lodDF)
+
+# ============================================================================
+# Plot LOD scores for all pairs of treatments with trend line to look for correlations within each chemical; doesn't change the fact that there is less correlation
+
+popDT <- do.call(rbind, repLODDTs)
+popDT[, logLOD := log(LOD), by = seq_len(nrow(popDT))]
+chemSplit <- split(popDT, popDT$chemWeek)
+chemLoop <- lapply(chemSplit, function(chem) {
+    print(chem$chemWeek[1])
+    flush.console()
+    replodDT <- dcast(chem, gp + chr + pos ~ Chemical, value.var = "LOD")
+    names(replodDT) <- gsub("18way_", "", names(replodDT))
+    names(replodDT) <- gsub("_", " ", names(replodDT))
+    replodDF <- as.data.frame(replodDT)
+    replodDF[,4:ncol(replodDF)] <- scale(replodDF[,4:ncol(replodDF)])
+    #gg1 = makePairs(replodDF[,-c(1:3)])
+    #mega_iris = data.frame(gg1$all)
+    panelPlot <- ggplot(replodDF, aes(replodDF[,4], replodDF[,5])) + xlab("") + ylab("") + facet_grid(names(replodDF)[4] ~ names(replodDF[5]), scales = "free", labeller = labeller(yvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "pearson", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_x_continuous(expand = c(0, 0), limits = c(0, NA)) + scale_y_continuous(expand = c(0, 0), limits = c(0, NA))
+    panelPlot
+} )
+savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_zscore_correlations_pearson.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
+
+# ============================================================================
+# Plot the Spearman correlation between LOD scores considering 1:n top peaks for each chemical separately
+
+
+popDT <- do.call(rbind, repLODDTs)
+topHapsDF <- read.table("topHapCombosAllChems.txt", header = T)
+topHaps <- as.character(unlist(strsplit(topHapsDF$topHapCombos, ";")))
+repShapes <- data.frame(reps = c(paste0("R0", 1:9), paste0("R1", 0:6)), shapes = c(0:6, 8:12, 15:18))
+
+firstRep <- repLODDTs[seq(1, length(repLODDTs), 2)]
+colNames <- rep(list('LOD'), length(firstRep))
+#threshold <- rep(list(25), length(indLODDTs))
+threshold <- rep(list(50), length(firstRep))
+allPeaks <- Map(inflect, firstRep, colNames, threshold)
+peakCol <- Map(add.sig.column, firstRep, allPeaks, rep.list(5, firstRep))
+top <- lapply(peakCol, function(x) {
+    peaks <- x[significant == 1]
+    topPeaks <- peaks[order(-LOD)][1:20][, Idx := 1:20] ### looking at the top 20 peaks
+    topPeaks
+} )
+peakPos <- lapply(top, function(x) {x$gp})
+lodInts <- lod.support.intervals(2.5)
+addLodInts <- Map(lodInts, peakCol)
+lodWins <- Map(find.lod.dts, addLodInts, peakPos)
+allLodWins <- do.call(rbind, lodWins)
+popDTsub <- merge(popDT, allLodWins[, c("gp", "Idx", "chemWeek")], by = c("gp", "chemWeek"))[order(Chemical, gp)]
+
+popDT[, logLOD := log(LOD), by = seq_len(nrow(popDT))]
+lodDT <- dcast(popDT, gp + chr + pos ~ Chemical, value.var = "logLOD")
+names(lodDT) <- gsub("18way_", "", names(lodDT))
+names(lodDT) <- gsub("_", " ", names(lodDT))
+lodDF <- as.data.frame(lodDT)
+lodDF[,4:ncol(lodDF)] <- scale(lodDF[,4:ncol(lodDF)])
+lodDT <- as.data.table(lodDF)
+lodDT2 <- melt(lodDT, id.vars = c("gp", "chr", "pos"), measure.vars = c(names(lodDT)[4:ncol(lodDT)]), variable.name = "Chemical", value.name = "zscore")
+popDTsub[, Chemical := gsub("18way_", "", Chemical)][, Chemical := gsub("_", " ", Chemical)]
+mrgeZs <- merge(popDTsub, lodDT2, by = c("gp", "Chemical"))
+grp1 <- mrgeZs[Idx == 1][, grp := 1]
+grp2 <- mrgeZs[Idx %like% 1:5][, grp := 2]
+grp3 <- mrgeZs[Idx %like% 1:10][, grp := 3]
+grp4 <- mrgeZs[Idx %like% 1:20][, grp := 4]
+grp5 <- mrgeZs[Idx %like% 1:20][, grp := 5]
+allGrps <- list(grp1, grp2, grp3, grp4, grp5)
+
+idxLoop <- lapply(allGrps, function(idx) {
+    print(idx$grp[1])
+    flush.console()
+    fileName <- paste0("within_chem_grp_", idx$grp[1], ".pdf")
+    #replodDT <- dcast(idx, gp + chr.x + pos.x + Idx ~ Chemical, value.var = "zscore")
+    #names(replodDT) <- gsub("18way_", "", names(replodDT))
+    #names(replodDT) <- gsub("_", " ", names(replodDT))
+    #replodDF <- as.data.frame(replodDT)
+    chemSplit <- split(idx, idx$chemWeek)
+    chemLoop <- lapply(chemSplit, function(chem){
+        replodDT <- dcast(chem, gp + chr.x + pos.x + grp ~ Chemical, value.var = "zscore")
+        replodDF <- as.data.frame(replodDT)
+        panelPlot <- ggplot(replodDF, aes(replodDF[,5], replodDF[,6])) + xlab("") + ylab("") + facet_grid(names(replodDF)[5] ~ names(replodDF[6]), scales = "free", labeller = labeller(yvar = label_wrap_gen(16))) + geom_point() + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + geom_smooth(span = 1) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1))
+        panelPlot
+    } )
+    savePlot <- do.call(ggarrange, c(chemLoop, list(common.legend = TRUE, legend = "right")))
+    savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "black", size = 14), left = text_grob("LOD2", color = "black", rot = 90, size = 14))
+    ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/", fileName), savingPlot, width = 8.5, height = 9, units = "in")
+} )
+
+
+
 
 # ============================================================================
 # Find the average Spearman correlation per site genomewide for each chemical separately.

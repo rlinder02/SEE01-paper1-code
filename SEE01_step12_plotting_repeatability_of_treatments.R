@@ -536,39 +536,58 @@ sdDT <- popDT3[, .(sdMax = sd(maxChange)), by = c("Chemical", "gp")]
 # Find the Spearman correlation coefficient for the most significant peaks, the middle peak, and a smaller peak for each drug. Make a dataframe that has the Chemical and averaged correlation coefficient over that interval. 
 
 directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
-files <- dir(path = directory, pattern = "_spearman_cors.txt$")
 setwd(directory)
-allCorDFs <- lapply(files, function(read) {
-    read.table(read, header = T, sep = "\t")
-} )
+allCorDF <- read.table("all_chems_all_reps_spearman_cors.txt", header = T, sep = "\t")
 setwd(paste0(projectDir, "Data_Storage/Sequencing_Data_Processed/"))
 
+allCorDF <- allCorDF[-grep("fluconazole|nic", rownames(allCorDF)),]
+allCorDF <- allCorDF[-grep("cadmium_chloride_12.*-R0[1-3]|YPD_12.*-R10|glacial_acetic_acid_12.*-R08|chlorpromazine_12.*-R12|chlorpromazine_12.*-R13", rownames(allCorDF)),]
+allCorDF <- allCorDF[, -grep("fluconazole|nic|cadmium_chloride_12.R0[1-3]|YPD_12.R10|glacial_acetic_acid_12.R08|chlorpromazine_12.R12|chlorpromazine_12.R13", names(allCorDF))]
+
 allIdx <- do.call(rbind, idxLooper)
+
 job::job(allChems = {
-    byChems <- lapply(allCorDFs, function(corr) {
-    identifier <- strsplit(rownames(corr)[1], "_")[[1]][2]
-    print(identifier)
-    flush.console()
-    tic('total time')
-    corr$gp <- substr(rownames(corr), regexpr("_12-", rownames(corr)) + 4, regexpr("-R", rownames(corr)) - 1)
-    corrLst <- split(corr, corr$gp)
-    rmveGP <- lapply(corrLst, function(x) {subset(x, select=-c(gp))})
-    corrLstMats <- lapply(rmveGP, as.matrix)
-    matMeans <- unlist(lapply(corrLstMats, function(x) mean(x[upper.tri(x)])))
-    meanCorDT <- data.table(gp = as.numeric(names(matMeans)), avgRho = matMeans)[order(gp)]
-    chemIdx <- allIdx[grepl(identifier, Chemical)]
-    idxSplit <- split(chemIdx, chemIdx$Idx)
-    idxLoop <- lapply(idxSplit, function(idx) {
+    chemReps <- unique(names(allCorDF))
+    chemNames <- gsub("X18way_|_12.*", "", chemReps)
+    names(chemReps) <- chemNames
+    chemSplit <- split(chemReps, names(chemReps))
+    byChems <- lapply(chemSplit, function(chem) {
+        ids <- paste(chem, collapse = "|")
+        tic()
+        corrGrp <- allCorDF[,grep(ids, names(allCorDF))]
+        corrGrp <- as.data.frame(corrGrp)
+        #rownames(corrGrp) <- rownames(allCorDF)
+        gpos <- substr(rownames(corrGrp), 1, unlist(gregexpr(pattern ='\\.',rownames(corrGrp)))[1] - 1)
+        gpos <- gsub("\\..*", "", gpos)
+        corrGrp$id <- gsub(".*18way_", "", rownames(allCorDF))
+        corrGrp$id <- gsub("_12.*-", "-", corrGrp$id)
+        corrGrp$gp <- gpos
+        #corrGrp$gp <- as.numeric(gsub(".*_12-|-R.*", "", rownames(allCorDF)))
+        corrGrpDT <- as.data.table(corrGrp)
+        chemName <- gsub("X18way_|_12.*", "", names(corrGrp)[1])
+        print(chemName)
+        flush.console()
+        chemName2 <- gsub("_", " ", chemName)
+        corrGrpDT <- corrGrpDT[grepl(chemName, id)]
+        corrGrpDT2 <- corrGrpDT[, id := NULL]
+        corrLst <- split(corrGrpDT2, corrGrpDT2$gp)
+        rmveGP <- lapply(corrLst, function(x) {subset(x, select=-c(gp))})
+        corrLstMats <- lapply(rmveGP, as.matrix)
+        matMeans <- unlist(lapply(corrLstMats, function(x) mean(x[upper.tri(x)])))
+        meanCorDT <- data.table(Chemical = chemName, gp = as.numeric(names(matMeans)), avgRho = matMeans)[order(gp)]
+        chemIdx <- allIdx[grepl(chemName2, Chemical)]
+        idxSplit <- split(chemIdx, chemIdx$Idx)
+        idxLoop <- lapply(idxSplit, function(idx) {
             idxMeanCorDT <- meanCorDT[grepl(paste(as.character(unique(idx$gp)), collapse = "|"), gp)]
             meanCor <- idxMeanCorDT[, mean(avgRho)]
             meanCorDT2 <- data.table(Chemical = idx$Chemical[1], avgRho = meanCor, idx = idx$Idx[1])
             meanCorDT2
+        } )
+        toc()
+        idxBind <- do.call(rbind, idxLoop)
+        idxBind
     } )
-    toc()
-    idxBind <- do.call(rbind, idxLoop)
-    idxBind
-} )
-}, import = c(allIdx, allCorDFs), packages = c("data.table", "tictoc") )
+}, import = c(allIdx, allCorDF), packages = c("data.table", "tictoc"), title = "calculating_correlations" )
 
 chemCorsDT <- do.call(rbind, allChems$byChems)     
 
@@ -614,7 +633,37 @@ idxLooperAll <- lapply(chemIndexer, function(idx)  {
         reps <- match(idxDT$Replicate, repShapes$reps)
         Shapes <- repShapes$shapes[reps]
         idxDT[, c("color.codes", "Shape") := .(Colors, Shapes)][, "pos(kb)" := pos/1000][, "pos" := NULL]
-        idxDT
+        chem <- idxDT[, hapGrps := haps][!hapGrps %in% topHaps, hapGrps := "other"][order(Replicate, haps, gp)][, c("difCol") := .(c(1000, diff(gp))), by = "haps"][, row := .I]
+        chem[, grpCol := paste0(haps, "_", difCol)]
+        chem2 <- chem[, grp := cumsum(c(TRUE, diff(gp)!=1000)), by = haps][order(row)] ### troubleshoot have two different haps in same group (gp 4207890)
+        chem2[, grp := cumsum(c(TRUE, diff(gp)!=1000)), by = haps]
+        chem2[, grp2 := rleid(haps)]
+        chem2[, grpCor := c(0, as.numeric((diff(grp) != 0)))]
+        chem2[, grpCor2 := c(0, as.numeric((diff(grp2) != 0)))]
+        chem2[, grpSum := rowSums(chem2[, c("grpCor", "grpCor2")])]
+        regrp <- chem2[grpSum == 2, grpSum := 1]
+        grpThrough <- rle(regrp$grpSum)
+        grpPass <- data.table(lengths = grpThrough$lengths, values = grpThrough$values)[, row := .I]
+        grpCnt <- grpPass[lengths > 1 & values == 1]
+        if(nrow(grpCnt) > 0) {
+            newCnt <- lapply(1:nrow(grpCnt), function(x){
+                newVals <- 1:grpCnt$lengths[x]
+                newRows <- seq(grpCnt$row[x], grpCnt$row[x] + length(newVals)/100, length.out = length(newVals)+1)
+                newRows <- newRows[-length(newRows)]
+                newDT <- data.table(lengths = 1, values = newVals, row = newRows)
+                newDT
+            } )
+            newCntDT <-  do.call(rbind, newCnt)
+            allCntDT <- rbind(grpPass, newCntDT)
+        } else {
+            allCntDT <- grpPass
+        }
+        allCnts <- allCntDT[!duplicated(row, fromLast = TRUE)][order(row)]
+        allCnts[, grp := rleid(values)]
+        allCnts2 <- allCnts[values == 0, grp := (grp-1)]
+        finalGrps <- rep(allCnts2$grp, allCnts2$lengths)
+        chem2[, finalGrp := finalGrps]
+        chem2
     } )
     idxDTs <- do.call(rbind, chemLooper)
     idxDTs
@@ -714,28 +763,9 @@ plotLooper <- lapply(idxLooperAll, function(indexing) {
         print(chem$Chemical[1])
         flush.console()
         spliceDT <- diffDT[Chemical == chem$Chemical[1]]
-        chem <- chem[, hapGrps := haps][!hapGrps %in% topHaps, hapGrps := "other"][order(Replicate, haps, gp)][, c("difCol") := .(c(1000, diff(gp))), by = .(Replicate, haps)][, row := .I]
-        chem[, grpCol := paste0(haps, "_", difCol)]
-        chem[, grp := with(rle(as.vector(grpCol)), rep(seq_along(lengths), lengths)), by = .(Replicate)]
-        reGrp <- chem[difCol != 1000, row]
-        nextGrp <- chem[row %in% (reGrp + 1), difCol]
-        nextRep <- chem[row %in% (reGrp + 1), Replicate]
-        grpRight <- which(nextGrp == 1000) 
-        grping <- chem[row %in% reGrp[grpRight], grp := chem[row %in% (reGrp[grpRight] + 1), grp]]
-        repSplit <- split(chem, chem$Replicate)
-        repLoop <- lapply(repSplit, function(repl) {
-            rleGrps <- rle(repl$grp)
-            rleGrps$values <- 1:length(rleGrps$values)
-            repl$grp <- rep(rleGrps$values, rleGrps$lengths)
-            repl
-        } )
-        allRepsDT <- do.call(rbind, repLoop)
-        correctGrps <- rle(allRepsDT$grp)
-        correctGrps$values <- 1:length(correctGrps$values)
-        allRepsDT$grp <- rep(correctGrps$values, correctGrps$lengths)
         corDT <- chemCorsDT[idx %in% chem$Idx[1] & Chemical %in% chem$Chemical[1]]
         corDT[, rhoLabel := sprintf("italic(R) == %.2f", avgRho)]
-        gplot <- ggplot(data=allRepsDT, aes(`pos(kb)`, freqDifs, colour = hapGrps, shape = Replicate, group = interaction(grp,Replicate))) + coord_cartesian(ylim = c(-1, 1.1)) + xlab(paste0("chr", as.roman(allRepsDT$chr[1]), " position (kb)")) + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(allRepsDT$color.codes, allRepsDT$hapGrps)) + scale_shape_manual(values = setNames(allRepsDT$Shape, allRepsDT$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = rhoLabel), parse = TRUE, inherit.aes = FALSE) + geom_segment(data = spliceDT, aes(x = `pos(kb)1`, xend = `pos(kb)2`, y = freq1, yend = freq2), colour = "darkgray", linetype = 2, show.legend = FALSE, inherit.aes = FALSE)
+        gplot <- ggplot(data=chem, aes(`pos(kb)`, freqDifs, colour = hapGrps, shape = Replicate, group = interaction(finalGrp,Replicate))) + coord_cartesian(ylim = c(-1, 1.1)) + xlab(paste0("chr", as.roman(chem$chr[1]), " position (kb)")) + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(chem$color.codes, chem$hapGrps)) + scale_shape_manual(values = setNames(chem$Shape, chem$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = rhoLabel), parse = TRUE, inherit.aes = FALSE) + geom_segment(data = spliceDT, aes(x = `pos(kb)1`, xend = `pos(kb)2`, y = freq1, yend = freq2), colour = "darkgray", linetype = 2, show.legend = FALSE, inherit.aes = FALSE)
         ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Ind_Plots/Hap_change_repeatability_by_peak_size_spearman", chem$Chemical[1], "_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
     } )
 } )
@@ -753,7 +783,7 @@ lodDF[,4:ncol(lodDF)] <- scale(lodDF[,4:ncol(lodDF)])
 lodDT <- as.data.table(lodDF)
 
 # ============================================================================
-# Plot LOD scores for all pairs of treatments with trend line to look for correlations within each chemical; doesn't change the fact that there is less correlation
+# Plot LOD scores for all pairs of treatments with trend line to look for correlations within each chemical
 
 popDT <- do.call(rbind, repLODDTs)
 popDT[, logLOD := log(LOD), by = seq_len(nrow(popDT))]

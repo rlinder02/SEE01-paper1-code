@@ -337,7 +337,60 @@ savePlot <- annotate_figure(arrangePlot, top = text_grob("SEE01_wk12_replicate_c
 ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/SEE01_wk12_haplotype_spearman_correlations.pdf"), savePlot, width = 8.5, height = 8.5, units = "in")
 
 # ============================================================================
-# Plot a dendrogram of all replicates for each sample using Spearman correlation
+# Plot a dendrogram of ALL replicates for ALL sample using Spearman correlation
+
+directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
+setwd(directory)
+allCorDF <- read.table("complete_chems_all_reps_spearman_cors.txt", header = T, sep = "\t")
+setwd(paste0(projectDir, "Data_Storage/Sequencing_Data_Processed/"))
+
+allCorDF <- allCors
+
+
+chemReps <- unique(names(allCorDF))
+corAvgs <- lapply(chemReps, function(x) {
+    print(x)
+    flush.console()
+    tic()
+    corrGrp <- allCorDF[,grep(x, names(allCorDF))]
+    corrGrp <- as.data.frame(corrGrp)
+    names(corrGrp) <- x
+    rownames(corrGrp) <- rownames(allCorDF)
+    corrGrp$id <- gsub(".*18way_", "", rownames(allCorDF))
+    corrGrp$id <- gsub("_12.*-", "-", corrGrp$id)
+    #corrGrp$gp <- as.numeric(gsub(".*_12-|-R.*", "", rownames(allCorDF)))
+    corrGrpDT <- as.data.table(corrGrp)
+    corrAvgs <- corrGrpDT[, mean(get(x), na.rm = T), by = id]
+    setnames(corrAvgs, c("id", x))
+    toc()
+    corrAvgs
+} )
+
+
+
+filePath <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/")
+CC2 <- do.call(cbind, corAvgs)
+CC3 <- as.data.frame(CC2)
+rownames(CC3) <- CC2$id
+CC4 <- CC3[, -grep("^id", names(CC3))]
+names(CC4) <- gsub("X18way_", "", names(CC4))
+names(CC4) <- gsub("_12.", "-", names(CC4))
+out <- hclust(as.dist(1-CC4^2))
+
+fileName <- paste0(filePath, "complete_reps_all_chems_Spearman_cors.pdf")
+mainTitle <- paste0("Spearman_correlations")
+pdf(fileName, width = 10, height = 10)
+par(mar = c(7.5,3,1.5,0.5), mgp = c(2,0.7,0), oma = c(0,0,0,0))
+par(cex = 0.75)
+plot(as.dendrogram(out), xlab = "", ylab = "", main = "", sub = "", axes = FALSE, ylim = c(0, 1))
+#rect.hclust(out, h = 0.85, border = "red")
+par(cex = 1)
+title(main = mainTitle, ylab = "height")
+axis(2)
+dev.off()
+
+# ============================================================================
+# Plot a dendrogram of selected replicates using Spearman correlation
 
 directory <- paste0(projectDir, "Data_Analysis/Sequencing_analysis/Tables/Correlation_tables/")
 setwd(directory)
@@ -682,6 +735,8 @@ idxLooperAll <- lapply(chemIndexer, function(idx)  {
                  hapCombos1 <- repl$haps[repl$gp == position]
                  hapCombos2 <- repl$haps[repl$gp == (position + 1000)]
                  if(any(!hapCombos2 %in% hapCombos1)) {
+                     print(position)
+                     flush.console()
                      diffHapDT <- repl[gp %in% c(position, position + 1000)]
                      diffHaps1 <- hapCombos1[which(!hapCombos1 %in% hapCombos2)]
                      diffHaps2 <- hapCombos2[which(!hapCombos2 %in% hapCombos1)]
@@ -716,37 +771,24 @@ idxLooperAll <- lapply(chemIndexer, function(idx)  {
 # ============================================================================
 # Plot the frequency change of all haplotypes (for each replicate), with each replicate a different shape and the haplotypes colored consistently with previous plots.
 
-### Still a bug when grouping (look at sodium chloride, index 1)
-counter <- 0
-plotLooper <- lapply(idxLooperAll, function(indexing) {
-    counter <<- counter + 1
-    diffDT <- diffDTs[[counter]]
-    print(counter)
-    flush.console()
-    chrDT <- indexing[, .(chr = chr[1]), by = "Chemical"]
-    indexing <- indexing[, hapGrps := haps][!hapGrps %in% topHaps, hapGrps := "other"][order(Replicate, haps, gp)][, c("difCol") := .(c(1000, diff(gp))), by = .(Replicate, haps)][, row := .I]
-    indexing[, grpCol := paste0(haps, "_", difCol)]
-    indexing[, grp := with(rle(as.vector(grpCol)), rep(seq_along(lengths), lengths)), by = .(Replicate)]
-    reGrp <- indexing[difCol != 1000, row]
-    nextGrp <- indexing[row %in% (reGrp + 1), difCol]
-    nextRep <- indexing[row %in% (reGrp + 1), Replicate]
-    grpRight <- which(nextGrp == 1000) 
-    grping <- indexing[row %in% reGrp[grpRight], grp := indexing[row %in% (reGrp[grpRight] + 1), grp]]
-    repSplit <- split(indexing, indexing$Replicate)
-    repLoop <- lapply(repSplit, function(repl) {
-        rleGrps <- rle(repl$grp)
-        rleGrps$values <- 1:length(rleGrps$values)
-        repl$grp <- rep(rleGrps$values, rleGrps$lengths)
-        repl
-    } )
-    allRepsDT <- do.call(rbind, repLoop)
-    correctGrps <- rle(allRepsDT$grp)
-    correctGrps$values <- 1:length(correctGrps$values)
-    allRepsDT$grp <- rep(correctGrps$values, correctGrps$lengths)
-    corDT <- chemCorsDT[idx %in% indexing$Idx[1]]
+quants <- quantile(peaks$LOD, probs = c(0.01, 0.05, 0.1, 0.25, 0.5, 0.75, 1))
+percentiles <- data.frame(Idx = 1:7, Percentile = c(paste0(c(100, 75, 50, 25, 10, 5), "th_Percentile"), "1st_Percentile"))
+
+allIdces <- do.call(rbind, idxLooperAll)
+chemSplit <- split(allIdces, allIdces$Chemical)
+
+plotLooper <- lapply(chemSplit, function(chem) {
+    chem <- merge(chem, percentiles, by = "Idx")
+    chem[, Percentile := factor(Percentile, levels=percentiles$Percentile)]
+    chrDT <- chem[, .(chr = chr[1]), by = "Percentile"]
+    chrDT[, Percentile := factor(Percentile, levels=percentiles$Percentile)]
+    corDT <- chemCorsDT[Chemical %in% chem$Chemical[1]]
+    setnames(corDT, old = "idx", new = "Idx")
+    corDT <- merge(corDT, percentiles, by = "Idx")
+    corDT[, Percentile := factor(Percentile, levels=percentiles$Percentile)]
     corDT[, rhoLabel := sprintf("italic(R) == %.2f", avgRho)]
-    gplot <- ggplot(data=allRepsDT, aes(`pos(kb)`, freqDifs, colour = hapGrps, shape = Replicate, group = interaction(grp, Replicate))) + facet_wrap(~as.factor(Chemical), scales = "free_x") + coord_cartesian(ylim = c(-1, 1.1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(allRepsDT$color.codes, allRepsDT$hapGrps)) + scale_shape_manual(values = setNames(allRepsDT$Shape, allRepsDT$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + geom_text(data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = rhoLabel), parse = TRUE, inherit.aes = FALSE)
-    ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Hap_change_repeatability_by_peak_size_Idx_", counter, ".pdf"), gplot, width = 8.5, height = 9, units = "in")
+    gplot <- ggplot(data=chem, aes(`pos(kb)`, freqDifs, colour = hapGrps, shape = Replicate, group = interaction(finalGrp,Replicate))) + facet_wrap(~Percentile, scales = "free_x") + coord_cartesian(ylim = c(-1, 1.1)) + xlab("position (kb)") + ylab("haplotype frequency change") + geom_point(size = 2) + geom_line() + scale_colour_manual(values=setNames(chem$color.codes, chem$hapGrps)) + scale_shape_manual(values = setNames(chem$Shape, chem$Replicate)) + theme_bw(base_size = 12) + theme(panel.grid = element_blank()) + geom_text(data = chrDT, aes(x = Inf, y = Inf, hjust = 1.1, vjust = 1.25, label = paste0('chr', as.roman(chr))), inherit.aes = FALSE) + geom_text(data = corDT, aes(x = -Inf, y = Inf, hjust = -0.15, vjust = 1.25, label = rhoLabel), parse = TRUE, inherit.aes = FALSE)
+    ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/Hap_change_repeatability_by_peak_size_", gsub(" ", "_", chem$Chemical[1]), "_.pdf"), gplot, width = 8.5, height = 9, units = "in")
 } )
 
 # ============================================================================
@@ -917,8 +959,8 @@ popDT[, Chemical := gsub("18way_", "", Chemical)]
 chem2 <- merge(popDT, gpCorDT, by = c("gp", "Chemical"))
 chem2[, Chemical := gsub("_", " ", Chemical)]
 chemDF <- as.data.frame(chem2)
-panelPlot <- ggplot(chemDF, aes(LOD, avgRho)) + facet_wrap(~as.factor(Chemical), scales = "free", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "left", label.y.npc = "top", size = 3) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 8.5) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1))
-ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/LOD_vs_avgRho_correlations.pdf"), panelPlot, width = 8.5, height = 9, units = "in")
+panelPlot <- ggplot(chemDF, aes(LOD, avgRho)) + facet_wrap(~as.factor(Chemical), scales = "free_x", labeller = labeller(xvar = label_wrap_gen(16))) + geom_hex(bins = 50) + stat_cor(aes(label = ..r.label..), method = "spearman", label.x.npc = "right", label.y.npc = "top", size = 3, hjust = 1) + scale_fill_continuous(type = "viridis") + geom_smooth(span = 0.3) + theme_bw(base_size = 10) + theme(panel.grid = element_blank(), axis.text.x = element_text(angle=45, hjust = 1)) + scale_y_continuous(name = "mean correlation", limits = c(0, 1))
+ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/LOD_vs_avgRho_correlations.pdf"), panelPlot, width = 8, height = 9, units = "in")
 
 # ============================================================================
 # Plot the correlation between LOD score and mean per site haplotype deviation genomewide.Again no correlation!
@@ -993,6 +1035,16 @@ savingPlot <- annotate_figure(savePlot, bottom = text_grob("LOD1", color = "blac
 ggsave(file = paste0(projectDir, "Data_Analysis/Sequencing_analysis/Plots/Repeatability_plots/within_chem_correlations.pdf"), savingPlot, width = 8.5, height = 9, units = "in")
 
 maxHapsDT <- popDT2[, .(maxHaps = uniqueN(maxHap)), by = c("Chemical", "gp")]
+
+# ============================================================================
+# qqplots; see if transformed differences are normally distributred- if so, can use Pearson correlation coefficient on the transformed differences to calculate correlation coefficients per-site
+
+a <- indHapDiffsDTs[[2]]
+freqDifs <- a[, tstrsplit(asinSqrtFreqDifs, split = ";", type.convert = TRUE, fixed = TRUE)]
+testNorm <- apply(freqDifs, 1, function(x) shapiro.test(x)$p.value)
+testBind <- as.data.table(testNorm)    
+notNorm1 <- which(testBind$testNorm <= 0.05)
+notNorm2 <- which(testBind$testNorm <= 0.05)
 
 # ============================================================================
 # Trouble-shooting
